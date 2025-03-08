@@ -1,5 +1,5 @@
 use croaring::bitmap64::Bitmap64Cursor;
-use croaring::{Bitmap64, Portable, Treemap};
+use croaring::{Bitmap64, Bitmap64View, Frozen, Portable, Treemap};
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use std::mem;
 use std::ops::RangeInclusive;
@@ -32,6 +32,7 @@ pub enum MutableBitmapOperation {
     RemoveRunCompression,
     MakeDeep,
     MakeWide,
+    ShrinkToFit,
     // Add to the max key (or with 0xFFFFFFFF_FFFF0000)
     AddToMax(u16),
 }
@@ -170,6 +171,8 @@ pub enum ReadBitmapOp {
     ToVec,
     GetPortableSerializedSizeInBytes,
     PortableSerialize,
+    GetFrozenSerializedSizeInBytes,
+    FrozenSerialize,
     IsEmpty,
     IntersectWithRange(RangeInclusive<u64>),
     Minimum,
@@ -243,6 +246,26 @@ impl ReadBitmapOp {
             }
             ReadBitmapOp::PortableSerialize => {
                 assert_eq!(b.serialize::<Portable>(), t.serialize::<Portable>(),)
+            }
+            ReadBitmapOp::GetFrozenSerializedSizeInBytes => {
+                let _ = b.get_serialized_size_in_bytes::<Frozen>();
+            }
+            ReadBitmapOp::FrozenSerialize => {
+                let mut vec = Vec::new();
+                let serialized = b.serialize_into_vec::<Frozen>(&mut vec);
+                if !serialized.is_empty() {
+                    let view = unsafe { Bitmap64View::deserialize::<Frozen>(serialized).unwrap() };
+                    assert_eq!(*b, view);
+                } else {
+                    vec.clear();
+                    let mut shrunk = b.clone();
+                    shrunk.shrink_to_fit();
+                    let serialized = shrunk.serialize_into_vec::<Frozen>(&mut vec);
+                    assert!(!serialized.is_empty());
+                    let view = unsafe { Bitmap64View::deserialize::<Frozen>(serialized).unwrap() };
+                    assert_eq!(*b, view);
+                    assert_eq!(shrunk, view);
+                }
             }
             ReadBitmapOp::ContainsRange(ref range) => {
                 // Unsupported by treemaps
@@ -320,6 +343,9 @@ impl MutableBitmapOperation {
                     t.add(i * 0x1_0000);
                 }
             }
+            MutableBitmapOperation::ShrinkToFit => {
+                t.shrink_to_fit();
+            }
         }
     }
 
@@ -383,6 +409,9 @@ impl MutableBitmapOperation {
                 for i in 0..200 {
                     b.add(i * 0x1_0000);
                 }
+            }
+            MutableBitmapOperation::ShrinkToFit => {
+                b.shrink_to_fit();
             }
         }
     }
